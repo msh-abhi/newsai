@@ -49,67 +49,41 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     };
     checkConnection();
 
-    const getInitialSessionAndOrg = async () => {
-      setLoading(true);
-      setIsOrgResolved(false);
-      try {
-        console.log('🔄 AuthProvider: Getting initial session...');
-        const { data: { session }, error } = await supabase.auth.getSession();
-        if (error) {
-          console.error('❌ AuthProvider: Failed to get initial session:', error);
-          setUser(null);
-          clearAuth();
-        } else {
-          console.log('✅ AuthProvider: Session found for user:', session?.user?.email);
-          setUser(session?.user || null);
-          
-          if (session?.user) {
-            await fetchAndSetOrganizations(session.user.id);
-          }
-        }
-      } catch (error) {
-        console.error('❌ AuthProvider: Exception getting initial session:', error);
-          setUser(null);
-          clearAuth();
-      } finally {
-        setLoading(false);
-        setIsOrgResolved(true);
-      }
-    };
-    getInitialSessionAndOrg();
+    setLoading(true);
+    setIsOrgResolved(false);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
+      async (event, session) => {
         console.log('Auth state changed:', event, session?.user?.email);
-        setLoading(true);
-        setIsOrgResolved(false);
-        try {
-          if (event === 'SIGNED_OUT') {
-            console.log('🚪 AuthProvider: User signed out, clearing auth state');
-            clearAuth();
-          } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-            console.log('🔑 AuthProvider: User signed in/token refreshed');
-            setUser(session?.user || null);
-            if (session?.user) {
-              fetchAndSetOrganizations(session.user.id);
-            }
-          } else {
-            console.log('🔄 AuthProvider: Other auth state change');
-            setUser(session?.user || null);
-          }
-        } catch (error) {
-          console.error('❌ AuthProvider: Error during auth change:', error);
-        } finally {
+
+        // When the user signs out, clear all auth-related state.
+        if (event === 'SIGNED_OUT') {
+          console.log('🚪 AuthProvider: User signed out, clearing auth state');
+          clearAuth();
           setLoading(false);
           setIsOrgResolved(true);
+          return;
         }
+
+        // For any other auth event, update the user and their organization.
+        const currentUser = session?.user || null;
+        setUser(currentUser);
+
+        if (currentUser) {
+          // Fetching organizations is critical for the app to function.
+          await fetchAndSetOrganizations(currentUser.id);
+        }
+        
+        // Once user and org are resolved, mark loading as complete.
+        setLoading(false);
+        setIsOrgResolved(true);
       }
     );
 
     return () => {
       subscription.unsubscribe();
     };
-  }, [setUser, setLoading, setOrganizations, setCurrentOrganization, setMembership, setIsOrgResolved, clearAuth]);
+  }, [clearAuth, setCurrentOrganization, setMembership, setOrganizations, setUser, setLoading, setIsOrgResolved]);
 
   const fetchAndSetOrganizations = async (userId: string) => {
     try {

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User } from '@supabase/supabase-js';
+import { User, Session } from '@supabase/supabase-js';
 import { supabase, isConnected } from '../lib/supabase';
 import { useAuthStore } from '../stores/authStore';
 import { Organization, OrganizationMember } from '../types';
@@ -41,6 +41,12 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const [isSupabaseConnected, setIsSupabaseConnected] = useState(false);
 
+  const withTimeout = (promise: Promise<any>, ms: number) =>
+    Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)),
+    ]);
+
   useEffect(() => {
     const checkConnection = () => {
       const connected = isConnected;
@@ -53,7 +59,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setIsOrgResolved(false);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (event: string, session: Session | null) => {
         console.log('Auth state changed:', event, session?.user?.email);
 
         // When the user signs out, clear all auth-related state.
@@ -71,9 +77,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
         if (currentUser) {
           // Fetching organizations is critical for the app to function.
-          await fetchAndSetOrganizations(currentUser.id);
+          try {
+            await withTimeout(fetchAndSetOrganizations(currentUser.id), 10000); // 10 seconds timeout
+          } catch (error) {
+            console.error('❌ AuthProvider: Error or timeout fetching organizations:', error);
+            // Set empty organizations and continue, as this might be expected for new users
+            setOrganizations([]);
+            setCurrentOrganization(null);
+            setMembership(null);
+            setIsOrgResolved(true);
+            setLoading(false);
+            return; // Prevent setting loading false twice
+          }
         }
-        
+
         // Once user and org are resolved, mark loading as complete.
         setLoading(false);
         setIsOrgResolved(true);
@@ -104,7 +121,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           throw error;
         }
       } else {
-        const organizations = data.map(member => member.organization).filter(Boolean) as Organization[] || [];
+        const organizations = data.map((member: any) => member.organization).filter(Boolean) as Organization[] || [];
         const firstOrg = organizations[0];
         const firstMembership = data?.[0];
 

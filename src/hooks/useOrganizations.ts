@@ -1,15 +1,30 @@
-import { useCallback } from 'react';
+ import { useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../stores/authStore';
 import { Organization, OrganizationMember } from '../types';
 import toast from 'react-hot-toast';
 
+// Extended interface for the joined data from Supabase
+interface OrganizationMemberWithOrg extends OrganizationMember {
+  organization: Organization;
+}
+
 export const useOrganizations = () => {
   const queryClient = useQueryClient();
   const { setOrganizations, setCurrentOrganization, setMembership } = useAuthStore();
+  const isFetchingRef = useRef(false);
+  const retryCountRef = useRef(0);
+  const maxRetries = 3;
 
   const fetchUserOrganizations = useCallback(async (userId: string) => {
+    if (isFetchingRef.current) {
+      console.log('useOrganizations: Fetch already in progress, skipping');
+      return { organizations: [], membership: null };
+    }
+
+    isFetchingRef.current = true;
+    
     try {
       console.log('useOrganizations: Fetching organizations for user:', userId);
       
@@ -60,7 +75,7 @@ export const useOrganizations = () => {
         return { organizations: [], membership: null };
       }
 
-      const organizations = data.map(member => member.organization).filter(Boolean) || [];
+      const organizations = data.map((member: OrganizationMemberWithOrg) => member.organization).filter(Boolean) as Organization[] || [];
       const firstOrg = organizations[0];
       const firstMembership = data?.[0];
 
@@ -78,6 +93,9 @@ export const useOrganizations = () => {
       setCurrentOrganization(null);
       setMembership(null);
       throw error; // Re-throw to let caller handle
+    } finally {
+      isFetchingRef.current = false;
+      retryCountRef.current = 0;
     }
   }, [setOrganizations, setCurrentOrganization, setMembership]);
 
@@ -106,7 +124,7 @@ export const useOrganizations = () => {
             name,
             slug,
             created_by: user.id,
-            plan: 'free',
+            plan: 'free' as const,
             settings: {
               max_newsletters_per_month: 10,
               max_team_members: 3,
@@ -126,7 +144,7 @@ export const useOrganizations = () => {
           .insert({
             organization_id: org.id,
             user_id: user.id,
-            role: 'owner'
+            role: 'owner' as const
           })
           .select()
           .single();
@@ -138,7 +156,7 @@ export const useOrganizations = () => {
         console.log('🔄 useOrganizations: Updating auth store with new organization');
         setCurrentOrganization(org);
         setMembership(membership);
-        setOrganizations(prev => [...prev, org]);
+        setOrganizations((prev: Organization[]) => [...prev, org]);
 
         return { organization: org, membership };
       } catch (error: any) {
@@ -199,8 +217,8 @@ export const useOrganizations = () => {
       
       // Force a small delay to ensure state is properly updated
       setTimeout(() => {
-        console.log('🔄 useOrganizations: Triggering page refresh after organization creation');
-        window.location.reload();
+        console.log('🔄 useOrganizations: State updated after organization creation');
+        // Don't force page reload anymore - let the app handle state transitions naturally
       }, 1000);
     },
     onError: (error) => {

@@ -79,7 +79,7 @@ const Dashboard: React.FC = () => {
                 >
                   {retrying ? 'refreshing...' : 'refreshing your account'}
                 </button>
-                {' '}or check that Supabase is properly connected. If you just created an organization, try refreshing the page.
+                {' '}or check that Supabase is properly connected. The app will automatically detect your new organization.
               </p>
             </div>
           )}
@@ -95,28 +95,28 @@ const Dashboard: React.FC = () => {
     {
       title: 'Newsletters Sent',
       value: overviewStats?.newsletters_sent?.toString() || '0',
-      change: overviewStats?.newsletters_sent > 0 ? '+12%' : '0%',
+      change: (overviewStats?.newsletters_sent || 0) > 0 ? '+12%' : '0%',
       icon: Mail,
       color: 'text-blue-600',
     },
     {
       title: 'Total Subscribers',
       value: overviewStats?.subscriber_growth?.toString() || '0',
-      change: overviewStats?.subscriber_growth > 0 ? '+5.2%' : '0%',
+      change: (overviewStats?.subscriber_growth || 0) > 0 ? '+5.2%' : '0%',
       icon: Users,
       color: 'text-green-600',
     },
     {
       title: 'Open Rate',
-      value: overviewStats ? `${overviewStats.open_rate.toFixed(1)}%` : '0%',
-      change: overviewStats?.open_rate > 0 ? '+2.1%' : '0%',
+      value: overviewStats ? `${(overviewStats.open_rate || 0).toFixed(1)}%` : '0%',
+      change: (overviewStats?.open_rate || 0) > 0 ? '+2.1%' : '0%',
       icon: TrendingUp,
       color: 'text-purple-600',
     },
     {
       title: 'AI Calls This Month',
       value: overviewStats?.ai_calls_this_month?.toString() || '0',
-      change: overviewStats?.ai_calls_this_month > 0 ? `+${overviewStats.ai_calls_this_month}` : '0',
+      change: (overviewStats?.ai_calls_this_month || 0) > 0 ? `+${overviewStats.ai_calls_this_month || 0}` : '0',
       icon: Brain,
       color: 'text-orange-600',
     },

@@ -19,6 +19,7 @@ import Settings from './pages/Settings';
 import ProtectedRoute from './components/Auth/ProtectedRoute';
 import EventSources from './pages/EventSources';
 import NewsletterManagement from './pages/NewsletterManagement';
+import EventsGuide from './pages/EventsGuide';
 import './index.css';
 
 const queryClient = new QueryClient({
@@ -51,7 +52,10 @@ function App() {
                 {/* Route 1: The public-facing landing page for authentication. */}
                 <Route path="/login" element={<Landing />} />
 
-                {/* Route 2: All protected application routes. */}
+                {/* Route 2: Events Guide landing page */}
+                <Route path="/events-guide" element={<EventsGuide />} />
+
+                {/* Route 3: All protected application routes. */}
                 <Route
                   path="/app/*"
                   element={

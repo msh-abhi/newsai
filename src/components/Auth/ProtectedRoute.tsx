@@ -13,17 +13,22 @@ interface ProtectedRouteProps {
 
 const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const { user, loading, isSupabaseConnected } = useAuth();
-  const { currentOrganization, isOrgResolved } = useAuthStore(); // Correct: Access the store's state
+  const { currentOrganization, isOrgResolved } = useAuthStore();
 
-  // Add debug logging to understand the state
+  // Add debug logging to understand the state (only log when actually changed)
+  const prevStateRef = React.useRef('');
   React.useEffect(() => {
-    console.log('🛡️ ProtectedRoute: State check', {
-      loading,
-      user: user?.email,
-      currentOrganization: currentOrganization?.name,
-      isSupabaseConnected,
-      isOrgResolved,
-    });
+    const stateKey = `${loading}_${user?.email}_${currentOrganization?.name}_${isSupabaseConnected}_${isOrgResolved}`;
+    if (prevStateRef.current !== stateKey) {
+      console.log('🛡️ ProtectedRoute: State check', {
+        loading,
+        user: user?.email,
+        currentOrganization: currentOrganization?.name,
+        isSupabaseConnected,
+        isOrgResolved,
+      });
+      prevStateRef.current = stateKey;
+    }
   }, [loading, user, currentOrganization, isSupabaseConnected, isOrgResolved]);
 
   // Show loading spinner while AuthProvider initializes the user and org data

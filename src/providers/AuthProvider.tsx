@@ -1,7 +1,9 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase, isConnected } from '../lib/supabase';
 import { useAuthStore } from '../stores/authStore';
+import { useOrganizationCache } from '../hooks/useOrganizationCache';
+import { authRecoveryService } from '../services/authRecoveryService';
 import { Organization, OrganizationMember } from '../types';
 import toast from 'react-hot-toast';
 
@@ -26,6 +28,9 @@ interface AuthProviderProps {
   children: React.ReactNode;
 }
 
+// Configuration
+const DEBOUNCE_DELAY = 800; // Reduced debounce delay
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const {
     user,
@@ -39,78 +44,106 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     clearAuth,
   } = useAuthStore();
 
+  const {
+    getCachedData,
+    cacheData,
+    loadFromCache,
+    updateCache,
+  } = useOrganizationCache();
+
   const [isSupabaseConnected, setIsSupabaseConnected] = useState(false);
   const isFetchingRef = useRef(false);
-  const retryCountRef = useRef(0);
-  const maxRetries = 3;
-
-  const withTimeout = (promise: Promise<any>, ms: number) =>
-    Promise.race([
-      promise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)),
-    ]);
-
-  const fetchAndSetOrganizations = async (userId: string, isRetry = false) => {
-    if (isFetchingRef.current && !isRetry) {
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastAuthEventRef = useRef<string>('');
+  const authInitializedRef = useRef(false);
+  
+  // Robust organization fetch with comprehensive error handling
+  const fetchOrganizationsRobustly = useCallback(async (userId: string, forceRefresh = false) => {
+    if (isFetchingRef.current && !forceRefresh) {
       console.log('🔄 AuthProvider: Organization fetch already in progress, skipping');
       return;
+    }
+
+    // Strategy 1: Use cache immediately if available and not forcing refresh
+    if (!forceRefresh) {
+      const cachedData = getCachedData(userId);
+      if (cachedData) {
+        console.log('📦 AuthProvider: Using cached organizations:', cachedData.organizations.length);
+        setOrganizations(cachedData.organizations || []);
+        setCurrentOrganization(cachedData.organizations?.[0] || null);
+        setMembership(cachedData.membership || null);
+        setIsOrgResolved(true);
+        
+        // Refresh in background if cache is older than 2 minutes
+        const cacheAge = Date.now() - cachedData.timestamp;
+        if (cacheAge > 2 * 60 * 1000) {
+          setTimeout(() => fetchOrganizationsRobustly(userId, true), 100);
+        }
+        return;
+      }
     }
 
     isFetchingRef.current = true;
     
     try {
-      console.log(`🔄 AuthProvider: Fetching organizations for user: ${userId} (Attempt ${retryCountRef.current + 1})`);
+      console.log('🔄 AuthProvider: Using recovery service to fetch organizations');
+      
+      // Use the recovery service with comprehensive fallback strategies
+      const result = await authRecoveryService.fetchOrganizationsWithRecovery(
+        userId,
+        getCachedData,
+        (orgs, membership) => {
+          setOrganizations(orgs);
+          setCurrentOrganization(orgs?.[0] || null);
+          setMembership(membership);
+          setIsOrgResolved(true);
+          
+          // Cache the result if we have valid data
+          if (orgs.length > 0 || membership) {
+            cacheData(userId, { organizations: orgs, membership, timestamp: Date.now() });
+          }
+        }
+      );
 
-      const { data, error } = await supabase
-        .from('organization_members')
-        .select(`*, organization:organizations(*)`)
-        .eq('user_id', userId);
-
-      if (error) {
-        if (error.code === 'PGRST116' || (data && data.length === 0)) {
-          console.log('📝 AuthProvider: No organizations found for user');
-          setOrganizations([]);
-          setCurrentOrganization(null);
-          setMembership(null);
-        } else {
-          throw error;
+      if (result.success) {
+        console.log(`✅ AuthProvider: Organizations fetched using strategy: ${result.strategy}`);
+        if (result.data) {
+          updateCache(userId, result.data.organizations, result.data.membership);
         }
       } else {
-        const organizations = data.map((member: any) => member.organization).filter(Boolean) as Organization[] || [];
-        const firstOrg = organizations[0];
-        const firstMembership = data?.[0];
-
-        console.log('✅ AuthProvider: Found organizations:', organizations.length);
-        console.log('🏢 AuthProvider: Setting current organization:', firstOrg?.name);
-        
-        setOrganizations(organizations);
-        setCurrentOrganization(firstOrg || null);
-        setMembership(firstMembership || null);
+        console.warn('⚠️ AuthProvider: Recovery failed, using graceful degradation');
+        // The recovery service already set fallback data
       }
     } catch (error) {
-      console.error('❌ AuthProvider: Error fetching organizations:', error);
-      
-      // Retry logic with exponential backoff
-      if (retryCountRef.current < maxRetries) {
-        retryCountRef.current++;
-        const delay = Math.min(1000 * Math.pow(2, retryCountRef.current - 1), 5000); // Max 5 seconds
-        
-        console.log(`🔄 AuthProvider: Retrying in ${delay}ms... (Attempt ${retryCountRef.current + 1}/${maxRetries + 1})`);
-        
-        await new Promise(resolve => setTimeout(resolve, delay));
-        return fetchAndSetOrganizations(userId, true);
-      }
-      
-      // If all retries fail, set empty state
+      console.error('❌ AuthProvider: Critical error in organization fetch:', error);
+      // Even on critical error, don't leave the user hanging
       setOrganizations([]);
       setCurrentOrganization(null);
       setMembership(null);
-      throw error;
+      setIsOrgResolved(true);
     } finally {
       isFetchingRef.current = false;
-      retryCountRef.current = 0;
     }
-  };
+  }, [getCachedData, cacheData, updateCache, setOrganizations, setCurrentOrganization, setMembership, setIsOrgResolved]);
+
+  // Debounced organization fetch
+  const debouncedFetchOrganizations = useCallback((userId: string, forceRefresh = false) => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    
+    debounceTimerRef.current = setTimeout(() => {
+      fetchOrganizationsRobustly(userId, forceRefresh);
+    }, DEBOUNCE_DELAY);
+  }, [fetchOrganizationsRobustly]);
+
+  // Enhanced cleanup
+  const cleanup = useCallback(() => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     const checkConnection = () => {
@@ -126,10 +159,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event: string, session: Session | null) => {
         console.log('Auth state changed:', event, session?.user?.email);
+        
+        // Prevent duplicate events
+        const eventKey = `${event}_${session?.user?.id}`;
+        if (lastAuthEventRef.current === eventKey && event !== 'SIGNED_OUT') {
+          console.log('🔄 AuthProvider: Duplicate auth event, skipping');
+          return;
+        }
+        lastAuthEventRef.current = eventKey;
 
         // When the user signs out, clear all auth-related state.
         if (event === 'SIGNED_OUT') {
           console.log('🚪 AuthProvider: User signed out, clearing auth state');
+          cleanup();
           clearAuth();
           setLoading(false);
           setIsOrgResolved(true);
@@ -150,32 +192,25 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         setUser(currentUser);
 
         if (currentUser) {
-          // Reset retry counter on new user session
-          retryCountRef.current = 0;
-          
-          // Fetching organizations is critical for the app to function.
-          try {
-            await withTimeout(fetchAndSetOrganizations(currentUser.id), 10000); // 10 seconds timeout
-          } catch (error) {
-            console.error('❌ AuthProvider: Error or timeout fetching organizations:', error);
-            // Set empty organizations and continue, as this might be expected for new users
-            setOrganizations([]);
-            setCurrentOrganization(null);
-            setMembership(null);
-            setIsOrgResolved(true);
-            setLoading(false);
-            return; // Prevent setting loading false twice
-          }
+          // Use debounced fetch to prevent rapid successive calls
+          debouncedFetchOrganizations(currentUser.id);
+        } else {
+          // Clear cache for no user
+          cleanup();
+          setOrganizations([]);
+          setCurrentOrganization(null);
+          setMembership(null);
+          setIsOrgResolved(true);
+          setLoading(false);
         }
-
-        // Once user and org are resolved, mark loading as complete.
-        setLoading(false);
-        setIsOrgResolved(true);
       }
     );
 
     // Initial session check
     const initializeSession = async () => {
+      if (authInitializedRef.current) return; // Prevent double initialization
+      authInitializedRef.current = true;
+      
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
         if (error) {
@@ -187,22 +222,28 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         
         if (session?.user) {
           setUser(session.user);
-          try {
-            await withTimeout(fetchAndSetOrganizations(session.user.id), 10000);
-          } catch (error) {
-            console.error('❌ AuthProvider: Error fetching initial organizations:', error);
-            setOrganizations([]);
-            setCurrentOrganization(null);
-            setMembership(null);
+          // Try to load from cache first
+          const loadedFromCache = loadFromCache(session.user.id);
+          
+          if (!loadedFromCache) {
+            // No cache available, fetch fresh data
+            setTimeout(() => debouncedFetchOrganizations(session.user.id), 100);
+          } else {
+            // Have cache, refresh in background
+            setTimeout(() => debouncedFetchOrganizations(session.user.id, true), 2000);
           }
+          
+          setIsOrgResolved(true);
+        } else {
+          setLoading(false);
+          setIsOrgResolved(true);
         }
-        
-        setLoading(false);
-        setIsOrgResolved(true);
       } catch (error) {
         console.error('❌ AuthProvider: Error during initialization:', error);
         setLoading(false);
         setIsOrgResolved(true);
+      } finally {
+        setLoading(false);
       }
     };
 
@@ -211,8 +252,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     return () => {
       subscription.unsubscribe();
+      cleanup();
     };
-  }, [clearAuth, setCurrentOrganization, setMembership, setOrganizations, setUser, setLoading, setIsOrgResolved]);
+  }, [clearAuth, setCurrentOrganization, setMembership, setOrganizations, setUser, setLoading, setIsOrgResolved, debouncedFetchOrganizations, loadFromCache, cleanup]);
 
   const signOut = async () => {
     try {

@@ -9,26 +9,7 @@
     - Add policies for organization-based access control
 */
 
--- Add created_by column to the organizations table first
-ALTER TABLE organizations
-ADD COLUMN created_by uuid REFERENCES auth.users(id) DEFAULT auth.uid();
-
--- Update existing rows to set created_by for organizations that might already exist
-UPDATE organizations
-SET created_by = (
-  SELECT user_id FROM organization_members
-  WHERE organization_id = organizations.id AND role = 'owner'
-  LIMIT 1
-)
-WHERE created_by IS NULL;
-
--- Make created_by NOT NULL after backfilling existing data
-ALTER TABLE organizations
-ALTER COLUMN created_by SET NOT NULL;
-
-
--- Create the organizations table (if it doesn't exist)
--- The created_by column is now part of this table
+-- Create the organizations table first (if it doesn't exist)
 CREATE TABLE IF NOT EXISTS organizations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text NOT NULL,
@@ -42,8 +23,42 @@ CREATE TABLE IF NOT EXISTS organizations (
   }'::jsonb,
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now(),
-  created_by uuid REFERENCES auth.users(id) NOT NULL DEFAULT auth.uid() -- Re-added here for idempotency
+  created_by uuid REFERENCES auth.users(id) DEFAULT auth.uid()
 );
+
+-- Add created_by column to the organizations table if it doesn't exist
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'organizations' AND column_name = 'created_by'
+  ) THEN
+    ALTER TABLE organizations
+    ADD COLUMN created_by uuid REFERENCES auth.users(id) DEFAULT auth.uid();
+  END IF;
+END $$;
+
+-- Update existing rows to set created_by for organizations that might already exist
+-- Only do this if organization_members table exists
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_name = 'organization_members'
+  ) THEN
+    UPDATE organizations
+    SET created_by = (
+      SELECT user_id FROM organization_members
+      WHERE organization_id = organizations.id AND role = 'owner'
+      LIMIT 1
+    )
+    WHERE created_by IS NULL;
+  END IF;
+END $$;
+
+-- Make created_by NOT NULL after backfilling existing data
+ALTER TABLE organizations
+ALTER COLUMN created_by SET NOT NULL;
 
 -- Create the organization_members table (if it doesn't exist)
 CREATE TABLE IF NOT EXISTS organization_members (

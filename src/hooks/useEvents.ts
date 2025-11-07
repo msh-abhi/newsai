@@ -80,8 +80,8 @@ export const useEvents = () => {
   });
 
   const triggerScraping = useMutation({
-    mutationFn: ({ organizationId, sourceIds }: { organizationId: string; sourceIds?: string[] }) =>
-      eventService.triggerScraping(organizationId, sourceIds),
+    mutationFn: ({ organizationId, sourceIds, forceRefresh }: { organizationId: string; sourceIds?: string[]; forceRefresh?: boolean }) =>
+      eventService.triggerScraping(organizationId, sourceIds, forceRefresh),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['events'] });
       queryClient.invalidateQueries({ queryKey: ['event-sources'] });
@@ -123,9 +123,9 @@ export const useEvents = () => {
   });
 
   const searchEvents = useMutation({
-    mutationFn: (query: string) =>
-      currentOrganization 
-        ? eventService.searchEvents(currentOrganization.id, query)
+    mutationFn: async (query: string) =>
+      currentOrganization
+        ? await eventService.searchEvents(currentOrganization.id, query)
         : [],
   });
 

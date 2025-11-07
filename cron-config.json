@@ -1,0 +1,8 @@
+{
+  "scheduled_event_scraper": {
+    "schedule": "0 6 * * *",
+    "function": "scheduled-scraper",
+    "enabled": true,
+    "description": "Daily event scraping at 6 AM EST"
+  }
+}

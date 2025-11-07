@@ -51,6 +51,13 @@ export interface Event {
   updated_at: string;
 }
 
+export interface ScrapingFilters {
+  organization_id: string;
+  filter_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 class EventService {
   async getEventSources(organizationId: string): Promise<EventSource[]> {
     try {
@@ -90,17 +97,17 @@ class EventService {
 
       console.log('✅ eventService: Event source created successfully:', data.id);
       return data;
-    } catch (error) {
-      console.error('Event source creation error - Full details:', {
-        error,
-        code: error?.code,
-        message: error?.message,
-        details: error?.details,
-        hint: error?.hint,
-        stack: error?.stack,
-      });
-      throw new Error(error?.message || 'Failed to create event source');
-    }
+      } catch (error: any) {
+        console.error('Event source creation error - Full details:', {
+          error,
+          code: error?.code,
+          message: error?.message,
+          details: error?.details,
+          hint: error?.hint,
+          stack: error?.stack,
+        });
+        throw new Error(error?.message || 'Failed to create event source');
+      }
   }
 
   async updateEventSource(id: string, updates: Partial<EventSource>): Promise<EventSource> {
@@ -117,7 +124,7 @@ class EventService {
 
       if (error) throw error;
       return data;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Event source update error:', error);
       throw new Error(error?.message || 'Failed to update event source');
     }
@@ -131,20 +138,21 @@ class EventService {
         .eq('id', id);
 
       if (error) throw error;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Event source deletion error:', error);
       throw new Error(error?.message || 'Failed to delete event source');
     }
   }
 
-  async triggerScraping(organizationId: string, sourceIds?: string[]): Promise<{ success: boolean; total_events: number; message: string }> {
+  async triggerScraping(organizationId: string, sourceIds?: string[], forceRefresh: boolean = false): Promise<{ success: boolean; total_events: number; message: string }> {
     try {
-      console.log('🚀 eventService: Triggering event scraping for organization:', organizationId);
+      console.log('🚀 eventService: Triggering event scraping for organization:', organizationId, forceRefresh ? '(force refresh)' : '');
 
       const { data, error } = await supabase.functions.invoke('event-scraper', {
         body: {
           organization_id: organizationId,
           source_ids: sourceIds,
+          force_refresh: forceRefresh,
         },
       });
 
@@ -483,6 +491,96 @@ class EventService {
     }
 
     return createdSources;
+  }
+
+  // Scraping Filter Methods
+  async getScrapingFilters(organizationId: string): Promise<ScrapingFilters | null> {
+    try {
+      const { data, error } = await supabase
+        .from('scraping_filters')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows returned
+      return data;
+    } catch (error) {
+      console.error('Error fetching scraping filters:', error);
+      return null;
+    }
+  }
+
+  async createOrUpdateScrapingFilters(organizationId: string, filters: Partial<ScrapingFilters>): Promise<ScrapingFilters> {
+    try {
+      const { data, error } = await supabase
+        .from('scraping_filters')
+        .upsert({
+          organization_id: organizationId,
+          ...filters,
+          updated_at: new Date().toISOString(),
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      console.error('Error updating scraping filters:', error);
+      throw new Error(error?.message || 'Failed to update scraping filters');
+    }
+  }
+
+  // Event Filter Methods (for frontend compatibility)
+  async getEventFilters(organizationId: string): Promise<any> {
+    const filters = await this.getScrapingFilters(organizationId);
+    if (!filters) return null;
+
+    return {
+      is_filtering_enabled: filters.filter_enabled,
+      filter_keywords: [
+        'sensory-friendly', 'sensory', 'adaptive', 'inclusive',
+        'autism-friendly', 'disabilities-accessible', 'autism',
+        'special needs', 'accessible', 'disabilities'
+      ],
+      custom_filters: []
+    };
+  }
+
+  async createOrUpdateEventFilters(organizationId: string, filters: any): Promise<any> {
+    const scrapingFilters = await this.createOrUpdateScrapingFilters(organizationId, {
+      filter_enabled: filters.is_filtering_enabled
+    });
+
+    return {
+      is_filtering_enabled: scrapingFilters.filter_enabled,
+      filter_keywords: [
+        'sensory-friendly', 'sensory', 'adaptive', 'inclusive',
+        'autism-friendly', 'disabilities-accessible', 'autism',
+        'special needs', 'accessible', 'disabilities'
+      ],
+      custom_filters: []
+    };
+  }
+
+  async getEventsForCalendar(organizationId: string, startDate?: string, endDate?: string): Promise<Event[]> {
+    try {
+      const start = startDate || new Date().toISOString();
+      const end = endDate || new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days
+
+      const { data, error } = await supabase
+        .from('events')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .gte('date_start', start)
+        .lte('date_start', end)
+        .order('date_start', { ascending: true });
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      console.error('Error fetching calendar events:', error);
+      return [];
+    }
   }
 }
 

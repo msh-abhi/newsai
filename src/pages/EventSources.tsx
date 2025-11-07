@@ -4,30 +4,27 @@ import {
   Calendar,
   Plus,
   Search,
-  TestTube,
   RefreshCw,
-  Settings,
-  CheckCircle,
   AlertTriangle,
-  XCircle,
-  ExternalLink,
   MapPin,
   Clock,
   Target,
-  Zap,
 } from 'lucide-react';
 import Card from '../components/UI/Card';
 import Button from '../components/UI/Button';
 import LoadingSpinner from '../components/UI/LoadingSpinner';
 import EventSourceCard from '../components/Events/EventSourceCard';
 import AddEventSourceModal from '../components/Events/AddEventSourceModal';
-import RecentEventsPanel from '../components/Events/RecentEventsPanel';
 import { useEvents } from '../hooks/useEvents';
 import { useAuthStore } from '../stores/authStore';
+import { eventService } from '../services/eventService';
 
 const EventSources: React.FC = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [scrapingFilters, setScrapingFilters] = useState({ filter_enabled: true });
+  const [filtersLoading, setFiltersLoading] = useState(false);
+  const [forceRefresh, setForceRefresh] = useState(false);
   const { currentOrganization } = useAuthStore();
   
   const {
@@ -50,10 +47,11 @@ const EventSources: React.FC = () => {
 
   const handleTriggerScraping = async () => {
     if (!currentOrganization) return;
-    
+
     try {
       await triggerScraping.mutateAsync({
         organizationId: currentOrganization.id,
+        forceRefresh,
       });
       // Refresh both sources and events after scraping
       setTimeout(() => {
@@ -65,15 +63,34 @@ const EventSources: React.FC = () => {
     }
   };
 
+  const handleScheduledScraping = async () => {
+    if (!currentOrganization) return;
+
+    try {
+      // This would trigger the scheduled scraper for all organizations
+      // For now, we'll just trigger it for the current organization
+      await triggerScraping.mutateAsync({
+        organizationId: currentOrganization.id,
+      });
+      // Refresh both sources and events after scraping
+      setTimeout(() => {
+        refetchSources();
+        refetchEvents();
+      }, 2000);
+    } catch (error) {
+      console.error('Scheduled scraping failed:', error);
+    }
+  };
+
   const handleCreateMiamiSources = async () => {
     if (!currentOrganization) return;
-    
+
     try {
       await createMiamiSources.mutateAsync(currentOrganization.id);
       refetchSources(); // Refresh the list immediately after creation
     } catch (error) {
       console.error('Failed to create Miami sources:', error);
-      toast.error('Failed to create default sources.'); // Assuming toast is available
+      // Error handling is done through the UI state
     }
   };
 
@@ -85,7 +102,7 @@ const EventSources: React.FC = () => {
       color: 'text-blue-600',
     },
     {
-      title: 'Upcoming Events',
+      title: 'Total Events',
       value: events.length.toString(),
       icon: Clock,
       color: 'text-green-600',
@@ -98,7 +115,7 @@ const EventSources: React.FC = () => {
     },
     {
       title: 'Last Scraped',
-      value: eventSources.length > 0 && eventSources.some(s => s.last_scraped_at) 
+      value: eventSources.length > 0 && eventSources.some(s => s.last_scraped_at)
         ? new Date(Math.max(...eventSources.filter(s => s.last_scraped_at).map(s => new Date(s.last_scraped_at!).getTime()))).toLocaleDateString()
         : 'Never',
       icon: RefreshCw,
@@ -123,7 +140,7 @@ const EventSources: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* Header */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -139,7 +156,39 @@ const EventSources: React.FC = () => {
               Manage autism and sensory-friendly event sources for newsletter content
             </p>
           </div>
-          <div className="flex space-x-3">
+          <div className="flex items-center space-x-3">
+            {/* Scraping Filter Toggle */}
+            <div className="flex items-center space-x-2 bg-white dark:bg-gray-800 rounded-lg p-2 border border-gray-200 dark:border-gray-600">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Filter Events:</span>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={scrapingFilters.filter_enabled}
+                  onChange={async (e) => {
+                    if (!currentOrganization?.id) return;
+                    setFiltersLoading(true);
+                    try {
+                      const updated = await eventService.createOrUpdateScrapingFilters(
+                        currentOrganization.id,
+                        { filter_enabled: e.target.checked }
+                      );
+                      setScrapingFilters(updated);
+                    } catch (error) {
+                      console.error('Error updating scraping filters:', error);
+                    } finally {
+                      setFiltersLoading(false);
+                    }
+                  }}
+                  disabled={filtersLoading}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                <span className="ml-2 text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {scrapingFilters.filter_enabled ? 'ON' : 'OFF'}
+                </span>
+              </label>
+            </div>
+
             <Button
               variant="secondary"
               icon={MapPin}
@@ -149,6 +198,23 @@ const EventSources: React.FC = () => {
             >
               Setup Miami Sources
             </Button>
+            {/* Force Refresh Toggle */}
+            <div className="flex items-center space-x-2 bg-white dark:bg-gray-800 rounded-lg p-2 border border-gray-200 dark:border-gray-600">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Force Refresh:</span>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={forceRefresh}
+                  onChange={(e) => setForceRefresh(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                <span className="ml-2 text-xs font-medium text-gray-600 dark:text-gray-400">
+                  {forceRefresh ? 'ON' : 'OFF'}
+                </span>
+              </label>
+            </div>
+
             <Button
               variant="outline"
               icon={RefreshCw}
@@ -156,7 +222,7 @@ const EventSources: React.FC = () => {
               onClick={handleTriggerScraping}
               disabled={eventSources.length === 0}
             >
-              Scrape Now
+              {forceRefresh ? 'Force Scrape' : 'Scrape Now'}
             </Button>
             <Button
               variant="primary"
@@ -202,11 +268,11 @@ const EventSources: React.FC = () => {
         ))}
       </motion.div>
 
-      {/* Search and Filters */}
+      {/* Search Bar */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.6, delay: 0.2 }}
+        transition={{ duration: 0.6, delay: 0.1 }}
       >
         <Card>
           <div className="flex flex-col md:flex-row md:items-center space-y-4 md:space-y-0 md:space-x-4">
@@ -220,11 +286,11 @@ const EventSources: React.FC = () => {
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 dark:bg-gray-700 dark:text-white"
               />
             </div>
-            
+
             {eventSources.length === 0 && (
               <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4">
                 <p className="text-sm text-blue-700 dark:text-blue-300">
-                  <strong>Quick Start:</strong> Click "Setup Miami Sources" to automatically configure 
+                  <strong>Quick Start:</strong> Click "Setup Miami Sources" to automatically configure
                   autism and sensory-friendly event sources for the Miami area.
                 </p>
               </div>
@@ -233,96 +299,77 @@ const EventSources: React.FC = () => {
         </Card>
       </motion.div>
 
-      <div className="grid lg:grid-cols-3 gap-8">
-        {/* Event Sources List */}
-        <div className="lg:col-span-2">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.3 }}
-          >
-            {sourcesLoading ? (
-              <Card className="text-center py-12">
-                <LoadingSpinner size="large" />
-                <p className="text-gray-600 dark:text-gray-300 mt-4">Loading event sources...</p>
-              </Card>
-            ) : sourcesError ? (
-              <Card className="text-center">
-                <AlertTriangle size={48} className="mx-auto text-red-400 mb-4" />
-                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
-                  Failed to Load Event Sources
-                </h3>
-                <p className="text-gray-600 dark:text-gray-300 mb-4">
-                  There was an error fetching your event sources.
-                </p>
-                <Button onClick={() => refetchSources()} icon={RefreshCw}>
-                  Retry
+      {/* Event Sources List */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.6, delay: 0.2 }}
+      >
+        {sourcesLoading ? (
+          <Card className="text-center py-12">
+            <LoadingSpinner size="large" />
+            <p className="text-gray-600 dark:text-gray-300 mt-4">Loading event sources...</p>
+          </Card>
+        ) : sourcesError ? (
+          <Card className="text-center">
+            <AlertTriangle size={48} className="mx-auto text-red-400 mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+              Failed to Load Event Sources
+            </h3>
+            <p className="text-gray-600 dark:text-gray-300 mb-4">
+              There was an error fetching your event sources.
+            </p>
+            <Button onClick={() => refetchSources()} icon={RefreshCw}>
+              Retry
+            </Button>
+          </Card>
+        ) : filteredSources.length > 0 ? (
+          <div className="space-y-4">
+            {filteredSources.map((source, index) => (
+              <motion.div
+                key={source.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: index * 0.1 }}
+              >
+                <EventSourceCard source={source} />
+              </motion.div>
+            ))}
+          </div>
+        ) : (
+          <Card className="text-center">
+            <Calendar size={48} className="mx-auto text-gray-400 mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+              {searchQuery ? 'No sources found' : 'No event sources configured'}
+            </h3>
+            <p className="text-gray-600 dark:text-gray-300 mb-6">
+              {searchQuery
+                ? 'Try adjusting your search terms.'
+                : 'Add event sources to automatically collect autism and sensory-friendly events for your newsletters.'
+              }
+            </p>
+            {!searchQuery && (
+              <div className="flex space-x-3 justify-center">
+                <Button
+                  variant="outline"
+                  icon={MapPin}
+                  onClick={handleCreateMiamiSources}
+                  loading={createMiamiSources.isPending}
+                >
+                  Setup Miami Sources
                 </Button>
-              </Card>
-            ) : filteredSources.length > 0 ? (
-              <div className="space-y-4">
-                {filteredSources.map((source, index) => (
-                  <motion.div
-                    key={source.id}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.4, delay: index * 0.1 }}
-                  >
-                    <EventSourceCard source={source} />
-                  </motion.div>
-                ))}
+                <Button
+                  variant="primary"
+                  icon={Plus}
+                  onClick={() => setShowAddModal(true)}
+                >
+                  Add Custom Source
+                </Button>
               </div>
-            ) : (
-              <Card className="text-center">
-                <Calendar size={48} className="mx-auto text-gray-400 mb-4" />
-                <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
-                  {searchQuery ? 'No sources found' : 'No event sources configured'}
-                </h3>
-                <p className="text-gray-600 dark:text-gray-300 mb-6">
-                  {searchQuery 
-                    ? 'Try adjusting your search terms.' 
-                    : 'Add event sources to automatically collect autism and sensory-friendly events for your newsletters.'
-                  }
-                </p>
-                {!searchQuery && (
-                  <div className="flex space-x-3 justify-center">
-                    <Button
-                      variant="outline"
-                      icon={MapPin}
-                      onClick={handleCreateMiamiSources}
-                      loading={createMiamiSources.isPending}
-                    >
-                      Setup Miami Sources
-                    </Button>
-                    <Button
-                      variant="primary"
-                      icon={Plus}
-                      onClick={() => setShowAddModal(true)}
-                    >
-                      Add Custom Source
-                    </Button>
-                  </div>
-                )}
-              </Card>
             )}
-          </motion.div>
-        </div>
-
-        {/* Recent Events Panel */}
-        <div className="lg:col-span-1">
-          <motion.div
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.6, delay: 0.4 }}
-          >
-            <RecentEventsPanel 
-              events={events} 
-              isLoading={eventsLoading}
-              onRefresh={() => refetchEvents()}
-            />
-          </motion.div>
-        </div>
-      </div>
+          </Card>
+        )}
+      </motion.div>
 
       {/* Add Event Source Modal */}
       <AddEventSourceModal

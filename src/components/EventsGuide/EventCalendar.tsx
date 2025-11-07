@@ -1,84 +1,59 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Card from '../UI/Card';
 import { Calendar, MapPin, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useAuthStore } from '../../stores/authStore';
+import { eventService } from '../../services/eventService';
 
 const EventCalendar = () => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
-  const [view, setView] = useState<'calendar' | 'list'>('calendar');
+  const [events, setEvents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { currentOrganization } = useAuthStore();
 
-  // Sample events data with more events for demonstration
-  const events = [
-    {
-      id: 1,
-      title: "Autism Support Group Meeting",
-      date: "2025-01-15",
-      time: "2:00 PM",
-      location: "Miami Community Center",
-      description: "Monthly support group for families with children on the autism spectrum."
-    },
-    {
-      id: 2,
-      title: "Special Needs Resource Fair",
-      date: "2025-01-20",
-      time: "10:00 AM",
-      location: "Downtown Miami Library",
-      description: "Connect with local organizations providing services for special needs families."
-    },
-    {
-      id: 3,
-      title: "Parent Education Workshop",
-      date: "2025-01-25",
-      time: "6:00 PM",
-      location: "Miami Children's Hospital",
-      description: "Learn about the latest therapies and interventions for developmental disabilities."
-    },
-    {
-      id: 4,
-      title: "Speech Therapy Session",
-      date: "2025-01-10",
-      time: "9:00 AM",
-      location: "Miami Speech Center",
-      description: "Individual speech therapy sessions for children with communication challenges."
-    },
-    {
-      id: 5,
-      title: "Family Yoga & Mindfulness",
-      date: "2025-01-18",
-      time: "4:00 PM",
-      location: "Yoga Studio Miami",
-      description: "Relaxing yoga session designed for families with special needs children."
-    },
-    {
-      id: 6,
-      title: "IEP Meeting Preparation",
-      date: "2025-01-22",
-      time: "11:00 AM",
-      location: "Virtual Meeting",
-      description: "Workshop to help parents prepare for Individualized Education Program meetings."
-    },
-    {
-      id: 7,
-      title: "Sensory Play Group",
-      date: "2025-01-12",
-      time: "3:00 PM",
-      location: "Sensory Center Miami",
-      description: "Fun sensory activities for children with sensory processing differences."
-    },
-    {
-      id: 8,
-      title: "Nutrition for Special Needs",
-      date: "2025-01-28",
-      time: "1:00 PM",
-      location: "Miami Nutrition Center",
-      description: "Learn about nutritional strategies for children with special dietary needs."
-    }
-  ];
+  // Fetch events on component mount and when organization changes
+  useEffect(() => {
+    const fetchEvents = async () => {
+      if (!currentOrganization?.id) return;
+
+      try {
+        setLoading(true);
+        const calendarEvents = await eventService.getEventsForCalendar(currentOrganization.id);
+        setEvents(calendarEvents);
+      } catch (error) {
+        console.error('Error fetching calendar events:', error);
+        // Fallback to sample data if API fails
+        setEvents([
+          {
+            id: 1,
+            title: "Autism Support Group Meeting",
+            date_start: "2025-01-15T14:00:00Z",
+            location: "Miami Community Center",
+            description: "Monthly support group for families with children on the autism spectrum."
+          },
+          {
+            id: 2,
+            title: "Special Needs Resource Fair",
+            date_start: "2025-01-20T10:00:00Z",
+            location: "Downtown Miami Library",
+            description: "Connect with local organizations providing services for special needs families."
+          }
+        ]);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchEvents();
+  }, [currentOrganization?.id]);
 
   // Get events for a specific date
   const getEventsForDate = (date: Date) => {
     const dateString = date.toISOString().split('T')[0];
-    return events.filter(event => event.date === dateString);
+    return events.filter(event => {
+      const eventDate = new Date(event.date_start).toISOString().split('T')[0];
+      return eventDate === dateString;
+    });
   };
 
   // Get all dates that have events in current month
@@ -87,10 +62,10 @@ const EventCalendar = () => {
     const month = currentDate.getMonth();
     return events
       .filter(event => {
-        const eventDate = new Date(event.date);
+        const eventDate = new Date(event.date_start);
         return eventDate.getFullYear() === year && eventDate.getMonth() === month;
       })
-      .map(event => new Date(event.date).getDate());
+      .map(event => new Date(event.date_start).getDate());
   };
 
   // Calendar navigation
@@ -257,8 +232,8 @@ const EventCalendar = () => {
 
             <div className="space-y-3">
               {events
-                .filter((event: any) => new Date(event.date) >= new Date())
-                .sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                .filter((event: any) => new Date(event.date_start) >= new Date())
+                .sort((a: any, b: any) => new Date(a.date_start).getTime() - new Date(b.date_start).getTime())
                 .slice(0, 3)
                 .map((event: any) => (
                   <div key={event.id} className="bg-gradient-to-r from-slate-50 to-white p-3 rounded-lg border border-slate-200 hover:shadow-sm transition-shadow">
@@ -268,11 +243,11 @@ const EventCalendar = () => {
                     <div className="text-xs text-slate-600 space-y-1">
                       <div className="flex items-center gap-2">
                         <Calendar className="h-3 w-3 text-slate-500" />
-                        <span className="font-medium">{new Date(event.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                        <span className="font-medium">{new Date(event.date_start).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <Clock className="h-3 w-3 text-slate-500" />
-                        <span className="font-medium">{event.time}</span>
+                        <span className="font-medium">{new Date(event.date_start).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}</span>
                       </div>
                     </div>
                   </div>
